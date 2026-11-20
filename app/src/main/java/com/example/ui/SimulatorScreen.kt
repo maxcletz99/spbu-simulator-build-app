@@ -36,12 +36,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -83,6 +86,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -92,6 +96,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -117,14 +122,19 @@ fun SimulatorScreen(
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     val rootView = LocalView.current
+    val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var popupWebView by remember { mutableStateOf<WebView?>(null) }
+    var popupTitle by remember { mutableStateOf("") }
     var customFullscreenView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
     var pendingFileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var lastBackPressMs by remember { mutableLongStateOf(0L) }
+
+    val safeBarInsets = WindowInsets.systemBars.union(WindowInsets.displayCutout)
+    val imeInsets = WindowInsets.ime
 
     val singleFileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent(),
@@ -158,14 +168,37 @@ fun SimulatorScreen(
         }
     }
 
+    // Smoothly pan the active WebView above the soft keyboard via translationY without resizing
+    // the WebView (resizing triggers window.onresize in the web game, which blurs inputs and
+    // dismisses the keyboard immediately after opening).
+    LaunchedEffect(webViewRef, popupWebView, uiState.isFullscreen) {
+        val marginPx = with(density) { 20.dp.toPx() }
+        snapshotFlow {
+            val imeBottom = imeInsets.getBottom(density)
+            val barBottom = if (uiState.isFullscreen) 0 else safeBarInsets.getBottom(density)
+            imeBottom to barBottom
+        }.collect { (imeBottom, barBottom) ->
+            val activeWebView = popupWebView ?: webViewRef ?: return@collect
+            val coveredBottomPx = (imeBottom - barBottom).coerceAtLeast(0)
+            panWebViewAboveKeyboard(
+                webView = activeWebView,
+                coveredBottomPx = coveredBottomPx,
+                marginPx = marginPx,
+            )
+        }
+    }
+
     // Sync WebView lifecycle with Activity lifecycle
-    DisposableEffect(lifecycleOwner, webViewRef) {
+    DisposableEffect(lifecycleOwner, webViewRef, popupWebView) {
         val observer = LifecycleEventObserver { _, event ->
-            val wv = webViewRef ?: return@LifecycleEventObserver
             when (event) {
-                Lifecycle.Event.ON_RESUME -> wv.onResume()
+                Lifecycle.Event.ON_RESUME -> {
+                    webViewRef?.onResume()
+                    popupWebView?.onResume()
+                }
                 Lifecycle.Event.ON_PAUSE -> {
-                    wv.onPause()
+                    webViewRef?.onPause()
+                    popupWebView?.onPause()
                     CookieManager.getInstance().flush()
                 }
                 else -> Unit
@@ -177,21 +210,23 @@ fun SimulatorScreen(
         }
     }
 
-    // Cleanup WebView only when screen permanently leaves composition
+    // Cleanup WebViews only when screen permanently leaves composition
     DisposableEffect(Unit) {
         onDispose {
             pendingFileCallback?.onReceiveValue(null)
             pendingFileCallback = null
-            popupWebView?.destroy()
+            destroyWebViewSafely(popupWebView)
             popupWebView = null
-            webViewRef?.destroy()
+            destroyWebViewSafely(webViewRef)
             webViewRef = null
         }
     }
 
     val closePopup: () -> Unit = {
-        popupWebView?.destroy()
+        val old = popupWebView
         popupWebView = null
+        popupTitle = ""
+        destroyWebViewSafely(old)
     }
 
     // Intercept system back button / gesture
@@ -242,7 +277,7 @@ fun SimulatorScreen(
         } else {
             Modifier
                 .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .windowInsetsPadding(safeBarInsets)
         }
 
         // Primary embedded WebView playing https://app.spbusimulator.online/ directly
@@ -280,15 +315,20 @@ fun SimulatorScreen(
                             customViewCallback = null
                         },
                         onCreateChildWebView = { resultMsg ->
-                            popupWebView?.destroy()
+                            val previous = popupWebView
+                            popupTitle = ""
                             val child = createPopupWebView(
                                 context = ctx,
-                                onCloseRequested = {
-                                    popupWebView?.destroy()
-                                    popupWebView = null
+                                onTitleChanged = { title ->
+                                    if (!title.isNullOrBlank()) {
+                                        popupTitle = title
+                                    }
                                 },
+                                onShowJsDialog = viewModel::showJsDialog,
+                                onCloseRequested = closePopup,
                             )
                             popupWebView = child
+                            destroyWebViewSafely(previous)
                             val transport = resultMsg.obj as? WebView.WebViewTransport
                             transport?.webView = child
                             resultMsg.sendToTarget()
@@ -303,7 +343,9 @@ fun SimulatorScreen(
                 }
             },
             update = { webView ->
-                webView.keepScreenOn = uiState.keepScreenOn
+                if (webView.keepScreenOn != uiState.keepScreenOn) {
+                    webView.keepScreenOn = uiState.keepScreenOn
+                }
             },
         )
 
@@ -314,7 +356,7 @@ fun SimulatorScreen(
                 progress = { (progress / 100f).coerceIn(0.05f, 1f) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .windowInsetsPadding(safeBarInsets)
                     .height(3.dp)
                     .align(Alignment.TopCenter),
                 color = MaterialTheme.colorScheme.primary,
@@ -329,7 +371,10 @@ fun SimulatorScreen(
             exit = fadeOut(animationSpec = tween(350)),
         ) {
             val progress = (uiState.loadState as? SimulatorLoadState.Loading)?.progress ?: 0
-            SimulatorLoadingOverlay(progress = progress)
+            SimulatorLoadingOverlay(
+                progress = progress,
+                safeBarInsets = safeBarInsets,
+            )
         }
 
         // Graceful offline / error screen
@@ -342,6 +387,7 @@ fun SimulatorScreen(
             if (errorState != null) {
                 SimulatorErrorOverlay(
                     errorState = errorState,
+                    safeBarInsets = safeBarInsets,
                     onRetry = {
                         viewModel.prepareRetry()
                         val wv = webViewRef
@@ -377,12 +423,23 @@ fun SimulatorScreen(
             )
         }
 
-        // In-app popup WebView modal for target="_blank" or window.open()
+        // In-app popup WebView modal for Google Sign-In / OAuth or target="_blank" windows
         popupWebView?.let { childWebView ->
-            InAppPopupOverlay(
-                popupWebView = childWebView,
-                onClose = closePopup,
-            )
+            androidx.compose.runtime.key(childWebView) {
+                InAppPopupOverlay(
+                    popupWebView = childWebView,
+                    title = popupTitle,
+                    safeBarInsets = safeBarInsets,
+                    onBack = {
+                        if (childWebView.canGoBack()) {
+                            childWebView.goBack()
+                        } else {
+                            closePopup()
+                        }
+                    },
+                    onClose = closePopup,
+                )
+            }
         }
 
         // Unobtrusive collapsible game controls pill anchored in top-end safe area
@@ -410,7 +467,7 @@ fun SimulatorScreen(
                 onToggleFullscreen = viewModel::toggleFullscreen,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .windowInsetsPadding(safeBarInsets)
                     .padding(top = 10.dp, end = 10.dp),
             )
         }
@@ -426,7 +483,10 @@ fun SimulatorScreen(
 }
 
 @Composable
-private fun SimulatorLoadingOverlay(progress: Int) {
+private fun SimulatorLoadingOverlay(
+    progress: Int,
+    safeBarInsets: WindowInsets,
+) {
     val infiniteTransition = rememberInfiniteTransition(label = "pump_pulse")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 0.95f,
@@ -450,7 +510,7 @@ private fun SimulatorLoadingOverlay(progress: Int) {
                     ),
                 ),
             )
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .windowInsetsPadding(safeBarInsets)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -523,6 +583,7 @@ private fun SimulatorLoadingOverlay(progress: Int) {
 @Composable
 private fun SimulatorErrorOverlay(
     errorState: SimulatorLoadState.Error,
+    safeBarInsets: WindowInsets,
     onRetry: () -> Unit,
 ) {
     Box(
@@ -533,7 +594,7 @@ private fun SimulatorErrorOverlay(
                     colors = listOf(Color(0xFF081421), Color(0xFF102235)),
                 ),
             )
-            .windowInsetsPadding(WindowInsets.safeDrawing)
+            .windowInsetsPadding(safeBarInsets)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -812,12 +873,15 @@ private fun GameControlsOverlay(
 @Composable
 private fun InAppPopupOverlay(
     popupWebView: WebView,
+    title: String,
+    safeBarInsets: WindowInsets,
+    onBack: () -> Unit,
     onClose: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.safeDrawing),
+            .windowInsetsPadding(safeBarInsets),
         color = Color(0xFF081421),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -828,19 +892,30 @@ private fun InAppPopupOverlay(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .testTag("popup_back_button"),
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = stringResource(R.string.action_back),
+                            tint = Color.White,
+                        )
+                    }
                     Text(
-                        text = stringResource(R.string.popup_title),
+                        text = title.ifBlank { stringResource(R.string.popup_title) },
                         style = MaterialTheme.typography.titleMedium,
                         color = Color.White,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .weight(1f)
-                            .padding(start = 8.dp),
+                            .padding(horizontal = 8.dp),
                     )
                     IconButton(
                         onClick = onClose,

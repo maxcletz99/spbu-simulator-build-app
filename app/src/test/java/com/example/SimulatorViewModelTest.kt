@@ -72,4 +72,13 @@ class SimulatorViewModelTest {
         assertTrue(vm.uiState.value.isFullscreen)
         assertFalse(vm.uiState.value.controlsExpanded)
     }
+
+    @Test
+    fun `user agent sanitization removes wv and Version markers for Google login`() {
+        val rawUa = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Build/UQ1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/121.0.6167.178 Mobile Safari/537.36"
+        val clean = com.example.ui.stripWebViewMarkersFromUserAgent(rawUa)
+        assertFalse(clean.contains("; wv"))
+        assertFalse(clean.contains("Version/4.0"))
+        assertTrue(clean.contains("Chrome/121.0.6167.178 Mobile Safari/537.36"))
+    }
 }

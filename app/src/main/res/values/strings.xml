@@ -27,5 +27,6 @@
     <string name="dialog_prompt_title">Input Required</string>
     <string name="press_back_again_to_exit">Press back again to exit SPBU Sim</string>
     <string name="popup_close">Close Window</string>
-    <string name="popup_title">In-App Window</string>
+    <string name="popup_title">Account Sign-In</string>
+    <string name="popup_loading">Loading secure window…</string>
 </resources>
