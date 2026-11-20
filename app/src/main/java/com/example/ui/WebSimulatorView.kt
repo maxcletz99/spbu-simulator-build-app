@@ -56,7 +56,6 @@ fun configureSimulatorWebView(
     webView.settings.apply {
         javaScriptEnabled = true
         domStorageEnabled = true
-        databaseEnabled = true
         mediaPlaybackRequiresUserGesture = false
         useWideViewPort = true
         loadWithOverviewMode = true
@@ -238,7 +237,6 @@ fun createPopupWebView(
         settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
-            databaseEnabled = true
             useWideViewPort = true
             loadWithOverviewMode = true
             builtInZoomControls = true
