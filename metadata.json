@@ -1,0 +1,6 @@
+{
+  "name": "SPBU Sim",
+  "description": "Play SPBU Simulator directly inside a dedicated, full-screen Android app experience.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

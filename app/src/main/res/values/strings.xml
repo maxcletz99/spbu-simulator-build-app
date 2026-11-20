@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">SPBU Sim</string>
+    <string name="loading_title">SPBU Simulator</string>
+    <string name="loading_subtitle">Connecting to station server…</string>
+    <string name="loading_progress_format">Loading %1$d%%</string>
+    <string name="error_title">Connection Interrupted</string>
+    <string name="error_subtitle_offline">No internet connection detected. Check your Wi-Fi or mobile data and try again.</string>
+    <string name="error_subtitle_generic">Unable to load the simulator right now (%1$s).</string>
+    <string name="action_retry">Retry Connection</string>
+    <string name="action_back">Back</string>
+    <string name="action_reload">Reload</string>
+    <string name="action_home">Station Home</string>
+    <string name="action_fullscreen">Fullscreen</string>
+    <string name="action_exit_fullscreen">Exit Fullscreen</string>
+    <string name="action_orientation_auto">Auto Rotate</string>
+    <string name="action_orientation_landscape">Landscape</string>
+    <string name="action_orientation_portrait">Portrait</string>
+    <string name="action_keep_screen_on">Keep Awake</string>
+    <string name="action_controls_expand">Open game controls</string>
+    <string name="action_controls_collapse">Collapse game controls</string>
+    <string name="cd_fuel_pump_badge">SPBU Simulator emblem</string>
+    <string name="cd_offline_icon">Offline connection indicator</string>
+    <string name="dialog_ok">OK</string>
+    <string name="dialog_cancel">Cancel</string>
+    <string name="dialog_confirm_title">Confirm</string>
+    <string name="dialog_alert_title">Notice</string>
+    <string name="dialog_prompt_title">Input Required</string>
+    <string name="press_back_again_to_exit">Press back again to exit SPBU Sim</string>
+    <string name="popup_close">Close Window</string>
+    <string name="popup_title">In-App Window</string>
+</resources>
